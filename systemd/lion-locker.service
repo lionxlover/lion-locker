@@ -1,0 +1,48 @@
+[Unit]
+Description=LionOS lock-screen authentication daemon
+Documentation=man:lion-locker(8)
+PartOf=lion-session.target
+After=lion-session.target
+
+[Service]
+Type=dbus
+BusName=os.lionos.Locker
+ExecStart=/usr/bin/lion-locker
+# Crash-relock contract (see src/state.rs): if the locker dies while
+# locked, the durable episode marker plus this restart policy re-acquire
+# the session lock at next start. RestartSec=0 collapses the
+# "locker crash = session exposed" window to a single process restart
+# (~tens of ms), instead of leaving the screen interactive until a human
+# notices. (Restart=always, not on-failure: the locker must also come
+# back from clean exits like compositor hiccups, still holding the
+# marker, to decide *then* whether a relock is needed.)
+Restart=always
+RestartSec=0
+Slice=session.slice
+
+# ---- Sandbox (session-service grade; everything here is compatible
+# ---- with talking to the compositor socket, the session bus, PAM and
+# ---- wl_shm/memfd):
+NoNewPrivileges=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+RestrictNamespaces=yes
+SystemCallArchitectures=native
+# AF_UNIX (Wayland + D-Bus) and AF_NETLINK (libsystemd/logind watches)
+# only; a lock screen has no business opening a network socket.
+RestrictAddressFamilies=AF_UNIX AF_NETLINK
+# mlockall for the password buffer: allow raising the memlock limit
+# (degrades gracefully where the session's limit is capped; the
+# Capabilities property reports the actual outcome).
+LimitMEMLOCK=infinity
+
+[Install]
+WantedBy=lion-session.target

@@ -1,0 +1,43 @@
+[package]
+name = "lion-locker"
+version = "0.2.0"
+edition = "2021"
+description = "LionOS lock-screen authentication daemon: ext-session-lock-v1 input grab, PAM re-auth (with module-chatter forwarding), crash-relock"
+license = "MIT"
+rust-version = "1.74"
+
+[[bin]]
+name = "lion-locker"
+path = "src/main.rs"
+
+[dependencies]
+# Session-bus IPC: public os.lionos.Locker service, and the private
+# render/render-event contract with lion-lockscreen.
+zbus = { version = "4", default-features = false, features = ["tokio"] }
+
+# Wayland: the ext-session-lock-v1 client that grabs input while locked.
+wayland-client = "0.31"
+wayland-backend = { version = "0.3", features = ["client_system"] }
+wayland-protocols = { version = "0.32", features = ["client", "staging"] }
+
+# Turns raw keycodes from wl_keyboard into characters for password entry.
+xkbcommon = "0.7"
+
+users = "0.11"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "signal"] }
+anyhow = "1"
+thiserror = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+zeroize = "1"
+libc = "0.2"
+serde_json = "1"
+
+[build-dependencies]
+# none — libpam linking is resolved by build.rs (same approach as lion-greeter)
+
+[profile.release]
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
