@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<node name="/os/lionos/Locker1">
+  <!-- Canonical interface definition for os.lionos.Locker1 (spec 03 §4).
+       Extensions (State, Failures) are marked below. Docs: docs/DBUS.md -->
+  <interface name="os.lionos.Locker1">
+    <!-- Lock the screen. Returns once the compositor confirmed the lock. -->
+    <method name="Lock"/>
+    <!-- Valid only right after a successful local PAM authentication
+         (locker.explicit_unlock = true). Otherwise AccessDenied. -->
+    <method name="Unlock"/>
+    <property name="IsLocked" type="b" access="read"/>
+    <!-- LionOS extension: "unlocked" | "locking" | "locked" | "unlocking" -->
+    <property name="State" type="s" access="read"/>
+    <!-- LionOS extension: consecutive failed unlock attempts -->
+    <property name="Failures" type="u" access="read"/>
+    <signal name="Locked"/>
+    <signal name="Unlocked"/>
+    <signal name="AuthFailed">
+      <arg name="count" type="u"/>
+    </signal>
+  </interface>
+</node>

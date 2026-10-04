@@ -1,0 +1,120 @@
+.TH LION-LOCKER 8 "2026" "LionOS" "System Administration"
+.SH NAME
+lion-locker \- LionOS secure screen lock
+.SH SYNOPSIS
+.B lion-locker
+[\fB\-\-config\fR \fIPATH\fR] [\fB\-\-mock\fR]
+.br
+.B lion-locker
+\fB\-\-check-config\fR | \fB\-\-print-schema\fR | \fB\-\-version\fR
+.SH DESCRIPTION
+.B lion-locker
+locks the screen through the
+.I ext-session-lock-v1
+Wayland protocol. Once the compositor confirms the lock, nothing but the
+lock surfaces is visible or focusable, and the compositor keeps the
+screen locked even if
+.B lion-locker
+dies. The session owner is re-authenticated with PAM. The lock screen UI
+(\fBlion-lockscreen\fR) is supervised by the daemon and talks to it over a
+private Unix socket.
+.PP
+The daemon is fail-closed: a crash, a UI failure, SIGTERM, a compositor
+.I finished
+event or a logind
+.I Unlock
+signal never unlocks the session. The only ways to unlock are a
+successful PAM authentication, a PAM-verified single-use grant consumed by
+.BR Unlock() ,
+or the opt-in grace window.
+.SH OPTIONS
+.TP
+.BI \-\-config " PATH"
+Configuration file (default /etc/lion/locker.json, or $LION_LOCKER_CONFIG).
+.TP
+.B \-\-check-config
+Validate the configuration and exit (non-zero on error).
+.TP
+.B \-\-print-schema
+Print the JSON Schema of the configuration.
+.TP
+.B \-\-mock
+Demo mode: scripted compositor, PAM accepts the password "lion". The UI
+socket and the D-Bus service are real.
+.TP
+.B \-\-version
+Print the version and exit.
+.SH CONFIGURATION
+Keys live under the top-level object "locker". Spec keys:
+.B lock_on_suspend
+(default true),
+.B grace_period_ms
+(0),
+.B hide_notification_content
+(true),
+.B show_media_controls
+(true). Documented extensions include
+.BR lock_on_lid_close ,
+.BR honor_logind_lock ,
+.BR emergency_info ,
+.BR allow_shutdown ,
+.BR greeter_session_id ,
+.BR explicit_unlock ,
+.BR pam ,
+.BR throttle ,
+.BR ui ,
+.BR rate_limit
+and
+.BR bus .
+Unknown keys are rejected. See
+.B --print-schema
+for the full list with ranges.
+.SH SIGNALS
+.TP
+.B SIGHUP
+Reload the configuration without dropping the UI or the lock.
+.TP
+.B SIGTERM
+Stop. The screen stays locked (compositor semantics) and the lock marker
+is kept, so a restarted daemon re-locks before reporting ready.
+.SH FILES
+.TP
+/etc/lion/locker.json
+Configuration.
+.TP
+/etc/pam.d/lion-locker
+PAM service used for re-authentication. If it is missing the daemon
+refuses to lock (an un-unlockable lock is worse than none).
+.TP
+$XDG_RUNTIME_DIR/lion-locker/
+(or
+.IR /run/user/<uid>/lion-locker ,
+logind-managed, when XDG_RUNTIME_DIR is unset)
+0700 runtime directory: the lock marker
+.RB ( locked )
+and the UI socket
+.RB ( ui.sock ,
+mode 0600). The daemon refuses to use a directory that is not owned by
+the session user or is group/other-accessible.
+.SH D-BUS
+Service
+.B os.lionos.Locker1
+on the session bus: methods Lock, Unlock; properties IsLocked, State,
+Failures; signals Locked, Unlocked, AuthFailed. Callers other than the
+session owner are denied. See docs/DBUS.md.
+.SH EXIT STATUS
+.TP
+0
+Clean stop.
+.TP
+1
+Fatal startup error (no lock protocol, no libpam, bad config, bus name
+unavailable) or the compositor connection was lost. systemd restarts the
+daemon, which re-locks if the marker exists.
+.TP
+2
+Bad command line.
+.SH SEE ALSO
+.BR lionctl-locker (1),
+.BR pam (8),
+.BR logind.conf (5)

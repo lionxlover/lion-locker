@@ -1,0 +1,61 @@
+# lion-locker.service — user unit (spec 03 §9)
+#
+# D-Bus activated (packaging/dbus/os.lionos.Locker1.service) and pulled in
+# by the graphical session. Type=notify: READY=1 is sent only after the
+# loop is running — and, after a crash, only after the lock marker has been
+# restored (a restarted daemon re-locks BEFORE it reports ready).
+#
+# Restart=always is load-bearing: a locker that dies while the screen is
+# locked is restarted immediately and re-locks (the compositor keeps the
+# screen locked in between: ext-session-lock-v1 semantics).
+
+[Unit]
+Description=LionOS screen locker (spec 03)
+Documentation=man:lion-locker(8)
+After=dbus.socket graphical-session.target
+PartOf=graphical-session.target
+# Start-rate limiting must never leave a locked screen without an owner.
+StartLimitIntervalSec=0
+
+[Service]
+Type=notify
+ExecStart=/usr/bin/lion-locker
+ExecReload=/bin/kill -s HUP $MAINPID
+KillSignal=SIGTERM
+TimeoutStopSec=10
+WatchdogSec=30
+Restart=always
+RestartSec=100ms
+# A hung locker must not keep a stale lock UI around.
+KillMode=control-group
+# A lock/unlock decision must survive memory pressure.
+OOMScoreAdjust=-900
+
+# ── §9 hardening ─────────────────────────────────────────────────────
+# NOT set, deliberately:
+#   NoNewPrivileges  — pam_unix verifies the password through the setuid
+#                      helper unix_chkpwd; no_new_privs would make every
+#                      correct password fail and strand the user.
+#   PrivateDevices   — the supervised lock UI needs /dev/dri for GPU
+#                      rendering (it is a child in this cgroup).
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=yes
+RestrictAddressFamilies=AF_UNIX
+RestrictNamespaces=yes
+RestrictRealtime=yes
+LockPersonality=yes
+SystemCallFilter=@system-service
+SystemCallArchitectures=native
+CapabilityBoundingSet=
+UMask=0077
+# dlopen'd PAM modules and the GPU stack need executable mappings.
+MemoryDenyWriteExecute=no
+# Runtime dir for the lock marker + UI socket (see locker.state_dir).
+RuntimeDirectory=lion-locker
+RuntimeDirectoryMode=0700
+RuntimeDirectoryPreserve=yes
+ReadWritePaths=%t/lion-locker
+
+[Install]
+WantedBy=graphical-session.target

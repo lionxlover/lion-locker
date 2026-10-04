@@ -1,0 +1,56 @@
+# CLP package manifest for lion-locker (spec 03 §13).
+# Signed builds + debug-symbol packages are produced by the CLP
+# toolchain from this manifest.
+
+[package]
+name = "lion-locker"
+version = "0.1.0"
+spec = "03"
+summary = "LionOS secure screen lock"
+description = """
+Locks the screen through ext-session-lock-v1 (the compositor guarantees
+nothing but the lock surface is visible or focusable, and keeps the screen
+locked if this process dies), re-authenticates the session owner with PAM,
+drives the lion-lockscreen UI over a private socket, locks before suspend
+via a logind delay inhibitor, and serves os.lionos.Locker1 on the session
+bus.
+"""
+license = "MIT OR Apache-2.0"
+arch = ["x86_64", "aarch64"]
+homepage = "https://lionos.org"
+
+[build]
+profile = "release"
+locked = true
+features = ["real-bus", "real-pam", "real-wayland"]
+tests = true
+bench = true
+
+[install]
+bin = ["target/release/lion-locker:/usr/bin/lion-locker"]
+libexec = []
+config = ["conf/lion-locker.json:/etc/lion/locker.json"]
+pam = ["packaging/pam/lion-locker:/etc/pam.d/lion-locker"]
+systemd-user = ["packaging/systemd/lion-locker.service"]
+dbus-services = ["packaging/dbus/os.lionos.Locker1.service"]
+dbus-interfaces = ["packaging/data/os.lionos.Locker1.xml"]
+schemas = ["packaging/lion-config/locker.schema.json:/usr/share/lionos/schemas/locker.schema.json"]
+man = [
+  "man/lion-locker.8:/usr/share/man/man8/",
+  "man/lionctl-locker.1:/usr/share/man/man1/",
+]
+tools = ["packaging/lionctl/lionctl-locker:/usr/bin/"]
+
+[depends]
+system = ["dbus", "systemd >= 248", "libpam0g", "libpam-modules"]
+lions = ["lion-compositor >= 0.1", "lion-lockscreen >= 0.1"]
+recommends = ["lion-session >= 0.1", "lion-notifications >= 0.1", "lion-greeter >= 0.1"]
+
+[debug-symbols]
+package = "lion-locker-dbg"
+strip = "debuginfo"
+
+[checks]
+schema = "packaging/lion-config/locker.schema.json"
+check-config = "lion-locker --check-config"
+smoke = "lion-locker --version && lion-locker --print-schema >/dev/null"

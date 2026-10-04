@@ -1,0 +1,54 @@
+#!/bin/sh
+# lionctl locker — admin subcommand for lion-locker (spec 03 §9).
+#
+# usage: lionctl locker <status|lock|unlock|signals|check|version|schema|reload>
+#
+# `unlock` only succeeds right after a local PAM authentication in
+# explicit-unlock mode; otherwise the daemon denies it (by design).
+
+set -eu
+
+CONFIG=${LION_LOCKER_CONFIG:-/etc/lion/locker.json}
+BINARY=$(command -v lion-locker || echo /usr/bin/lion-locker)
+NAME=os.lionos.Locker1
+PATH_=/os/lionos/Locker1
+
+cmd=${1:-status}
+shift 2>/dev/null || true
+
+get_prop() {
+    busctl --user get-property "$NAME" "$PATH_" "$NAME" "$1" 2>/dev/null || echo "unavailable"
+}
+
+case "$cmd" in
+    status)
+        echo "IsLocked: $(get_prop IsLocked)"
+        echo "State:    $(get_prop State)"
+        echo "Failures: $(get_prop Failures)"
+        ;;
+    lock)
+        busctl --user call "$NAME" "$PATH_" "$NAME" Lock
+        ;;
+    unlock)
+        busctl --user call "$NAME" "$PATH_" "$NAME" Unlock
+        ;;
+    signals)
+        exec busctl --user monitor "$NAME"
+        ;;
+    reload)
+        exec systemctl --user reload lion-locker.service
+        ;;
+    check)
+        exec "$BINARY" --check-config --config "$CONFIG"
+        ;;
+    version)
+        exec "$BINARY" --version
+        ;;
+    schema)
+        exec "$BINARY" --print-schema
+        ;;
+    *)
+        echo "usage: lionctl locker <status|lock|unlock|signals|reload|check|version|schema>" >&2
+        exit 2
+        ;;
+esac

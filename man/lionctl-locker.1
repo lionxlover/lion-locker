@@ -1,0 +1,37 @@
+.TH LIONCTL-LOCKER 1 "2026" "LionOS" "User Commands"
+.SH NAME
+lionctl-locker \- control the LionOS screen locker
+.SH SYNOPSIS
+.B lionctl locker
+.RI [ status | lock | unlock | signals | reload | check | version | schema ]
+.SH DESCRIPTION
+Thin wrapper around
+.BR busctl (1)
+for the
+.B os.lionos.Locker1
+service.
+.TP
+.B status
+Print IsLocked, State and Failures.
+.TP
+.B lock
+Lock the screen now.
+.TP
+.B unlock
+Call Unlock(). Succeeds only right after a local PAM authentication in
+explicit-unlock mode; otherwise the daemon denies it by design.
+.TP
+.B signals
+Monitor Locked, Unlocked and AuthFailed.
+.TP
+.B reload
+Ask systemd to send SIGHUP to the daemon.
+.TP
+.B check
+Validate the configuration file.
+.SH ENVIRONMENT
+.TP
+.B LION_LOCKER_CONFIG
+Configuration path (default /etc/lion/locker.json).
+.SH SEE ALSO
+.BR lion-locker (8)

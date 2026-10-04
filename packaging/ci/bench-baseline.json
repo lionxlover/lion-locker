@@ -1,0 +1,8 @@
+{"component":"lion-locker","metric":"decode_per_sec","value":3465295.061,"unit":"ops/s"}
+{"component":"lion-locker","metric":"encode_per_sec","value":1209591.026,"unit":"ops/s"}
+{"component":"lion-locker","metric":"throttle_delay_per_sec","value":651132384.330,"unit":"ops/s"}
+{"component":"lion-locker","metric":"ratelimit_per_sec","value":359516.170,"unit":"ops/s"}
+{"component":"lion-locker","metric":"lock_cold_us","value":1163.664,"unit":"us"}
+{"component":"lion-locker","metric":"lock_warm_p50_us","value":1.911,"unit":"us"}
+{"component":"lion-locker","metric":"lock_warm_p99_us","value":6.835,"unit":"us"}
+{"component":"lion-locker","metric":"rss_kib","value":7020.000,"unit":"KiB"}

@@ -1,0 +1,27 @@
+{
+  "locker": {
+    "lock_on_suspend": true,
+    "grace_period_ms": 0,
+    "hide_notification_content": true,
+    "show_media_controls": true,
+
+    "lock_on_lid_close": true,
+    "honor_logind_lock": true,
+    "emergency_info": "",
+    "allow_shutdown": true,
+    "greeter_session_id": "",
+    "explicit_unlock": false,
+    "cover_color": "#14161C",
+
+    "pam": { "service": "lion-locker", "timeout_seconds": 30 },
+    "throttle": { "enabled": true, "free_attempts": 3, "base_seconds": 5, "cap_seconds": 300 },
+    "ui": {
+      "exec": ["/usr/libexec/lion-lockscreen"],
+      "expected_cgroup_suffix": "",
+      "respawn_backoff_ms": 250,
+      "respawn_backoff_max_ms": 5000
+    },
+    "rate_limit": { "window_ms": 10000, "max_calls": 30 },
+    "bus": { "name": "os.lionos.Locker1", "logind": "system" }
+  }
+}

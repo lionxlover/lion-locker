@@ -1,43 +1,68 @@
 [package]
 name = "lion-locker"
-version = "0.2.0"
+version = "0.1.0"
 edition = "2021"
-description = "LionOS lock-screen authentication daemon: ext-session-lock-v1 input grab, PAM re-auth (with module-chatter forwarding), crash-relock"
-license = "MIT"
-rust-version = "1.74"
+rust-version = "1.80"
+description = "LionOS secure screen lock: ext-session-lock-v1, PAM re-authentication, lock-screen UI driver (spec 03)"
+license = "MIT OR Apache-2.0"
+repository = "https://git.lionos.org/lion-locker"
+publish = false
+
+[lib]
+name = "lion_locker"
+path = "src/lib.rs"
 
 [[bin]]
 name = "lion-locker"
 path = "src/main.rs"
 
+[features]
+default = ["real-bus", "real-pam", "real-wayland"]
+# zbus: os.lionos.Locker1 service, org.freedesktop.login1 (sleep inhibitor,
+# Lock signal, LockedHint), org.freedesktop.Notifications.
+real-bus = ["dep:zbus", "dep:futures-util"]
+# dlopen(3)-based libpam backend. Audited unsafe FFI lives in
+# `lion_locker::pam::sys` and `lion_locker::sysffi` only.
+real-pam = []
+# ext-session-lock-v1 client (wayland-client, safe Rust; shm via memfd).
+real-wayland = ["dep:wayland-client", "dep:wayland-protocols", "dep:rustix"]
+
 [dependencies]
-# Session-bus IPC: public os.lionos.Locker service, and the private
-# render/render-event contract with lion-lockscreen.
-zbus = { version = "4", default-features = false, features = ["tokio"] }
-
-# Wayland: the ext-session-lock-v1 client that grabs input while locked.
-wayland-client = "0.31"
-wayland-backend = { version = "0.3", features = ["client_system"] }
-wayland-protocols = { version = "0.32", features = ["client", "staging"] }
-
-# Turns raw keycodes from wl_keyboard into characters for password entry.
-xkbcommon = "0.7"
-
-users = "0.11"
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "signal"] }
-anyhow = "1"
-thiserror = "1"
-tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-zeroize = "1"
-libc = "0.2"
+tokio = { version = "1", features = ["rt-multi-thread", "net", "io-util", "sync", "time", "macros", "process", "signal"] }
+async-trait = "0.1"
+serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+zeroize = { version = "1", features = ["zeroize_derive"] }
+libc = "0.2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
+zbus = { version = "5", default-features = false, features = ["tokio"], optional = true }
+futures-util = { version = "0.3", default-features = false, features = ["std"], optional = true }
+wayland-client = { version = "0.31", optional = true }
+wayland-protocols = { version = "0.32", features = ["client", "staging"], optional = true }
+rustix = { version = "1", default-features = false, features = ["std", "fs", "event"], optional = true }
 
-[build-dependencies]
-# none — libpam linking is resolved by build.rs (same approach as lion-greeter)
+[dev-dependencies]
+tempfile = "3"
+proptest = "1"
+tokio = { version = "1", features = ["test-util"] }
+wayland-server = "0.31"
+wayland-protocols = { version = "0.32", features = ["server", "client", "staging"] }
+wayland-client = "0.31"
+
+[[example]]
+name = "locker_client"
+path = "examples/locker_client.rs"
+
+[[bench]]
+name = "lion_bench"
+path = "benches/lion_bench.rs"
+harness = false
 
 [profile.release]
-lto = true
+lto = "thin"
 codegen-units = 1
-panic = "abort"
-strip = true
+strip = "debuginfo"
+
+[profile.bench]
+debug = true

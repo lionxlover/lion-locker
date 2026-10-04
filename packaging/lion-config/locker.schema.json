@@ -1,0 +1,78 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://lionos.org/schema/locker.schema.json",
+  "title": "Lion Locker configuration (locker.*)",
+  "type": "object",
+  "required": ["locker"],
+  "additionalProperties": false,
+  "properties": {
+    "locker": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "lock_on_suspend": {"type": "boolean", "default": true, "description": "Lock before sleep via a logind delay inhibitor (spec 03 §3)."},
+        "grace_period_ms": {"type": "integer", "minimum": 0, "maximum": 60000, "default": 0, "description": "Unlock-free window after lock; 0 disables."},
+        "hide_notification_content": {"type": "boolean", "default": true},
+        "show_media_controls": {"type": "boolean", "default": true},
+        "lock_on_lid_close": {"type": "boolean", "default": true},
+        "honor_logind_lock": {"type": "boolean", "default": true, "description": "Honour logind's per-session Lock signal. Unlock is never honoured."},
+        "emergency_info": {"type": "string", "maxLength": 512, "default": ""},
+        "allow_shutdown": {"type": "boolean", "default": true},
+        "greeter_session_id": {"type": "string", "pattern": "^[A-Za-z0-9_.-]{0,64}$", "default": "", "description": "Non-empty enables the switch-user quick action."},
+        "explicit_unlock": {"type": "boolean", "default": false, "description": "PAM success only grants a short-lived unlock; the owner then calls Unlock()."},
+        "unlock_grant_ttl_ms": {"type": "integer", "minimum": 100, "maximum": 60000, "default": 5000},
+        "sleep_lock_timeout_ms": {"type": "integer", "minimum": 100, "maximum": 4500, "default": 2000},
+        "cover_color": {"type": "string", "pattern": "^#[0-9A-Fa-f]{6}$", "default": "#14161C"},
+        "preflight": {"type": "boolean", "default": true, "description": "Refuse to lock when no unlock path exists (PAM service file, UI binary)."},
+        "pam_dir": {"type": "string", "default": "/etc/pam.d"},
+        "state_dir": {"type": "string", "default": ""},
+        "owner_uid": {"type": ["integer", "null"], "minimum": 0, "default": null},
+        "pam": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "service": {"type": "string", "pattern": "^[A-Za-z0-9_.-]{1,64}$", "default": "lion-locker"},
+            "timeout_seconds": {"type": "integer", "minimum": 1, "maximum": 300, "default": 30}
+          }
+        },
+        "throttle": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {"type": "boolean", "default": true},
+            "free_attempts": {"type": "integer", "minimum": 0, "maximum": 20, "default": 3},
+            "base_seconds": {"type": "integer", "minimum": 1, "maximum": 3600, "default": 5},
+            "cap_seconds": {"type": "integer", "minimum": 1, "maximum": 86400, "default": 300}
+          }
+        },
+        "ui": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "exec": {"type": "array", "items": {"type": "string"}, "default": ["/usr/libexec/lion-lockscreen"]},
+            "socket_path": {"type": "string", "default": ""},
+            "expected_cgroup_suffix": {"type": "string", "default": ""},
+            "respawn_backoff_ms": {"type": "integer", "minimum": 10, "maximum": 60000, "default": 250},
+            "respawn_backoff_max_ms": {"type": "integer", "minimum": 10, "maximum": 600000, "default": 5000}
+          }
+        },
+        "bus": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "name": {"type": "string", "minLength": 1, "maxLength": 255, "default": "os.lionos.Locker1"},
+            "logind": {"type": "string", "enum": ["system", "session"], "default": "system"}
+          }
+        },
+        "rate_limit": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "window_ms": {"type": "integer", "minimum": 100, "maximum": 600000, "default": 10000},
+            "max_calls": {"type": "integer", "minimum": 1, "maximum": 10000, "default": 30}
+          }
+        }
+      }
+    }
+  }
+}

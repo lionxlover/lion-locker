@@ -1,0 +1,27 @@
+[package]
+name = "lion-locker-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+# Path to the library under test (spec 03 §10: fuzz the UI-protocol parser).
+lion-locker = { path = "..", default-features = false, features = ["real-pam"] }
+
+[[bin]]
+name = "decode_request"
+path = "fuzz_targets/decode_request.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "parse_config"
+path = "fuzz_targets/parse_config.rs"
+test = false
+doc = false
+bench = false

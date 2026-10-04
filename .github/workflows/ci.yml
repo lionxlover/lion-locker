@@ -1,0 +1,80 @@
+name: lion-locker CI
+# Spec 02 §10: fmt + clippy(-D warnings) + test + deny + fuzz smoke +
+# coverage. Performance gates via lion-bench JSON. (The nspawn end-to-end
+# job is deferred until lion-lockscreen exists; see DESIGN.md §9.)
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - run: cargo fmt --check
+      - run: cargo clippy --all-targets -- -D warnings
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install dbus-daemon (real-bus acceptance)
+        run: sudo apt-get update && sudo apt-get install -y dbus python3
+      - run: cargo test --locked
+      # mock-only build must also compile (feature hygiene)
+      - run: cargo test --locked --no-default-features
+
+  deny:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          arguments: --all-features check
+
+  bench-regression:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Baseline + current bench (JSON), fail on >10% regression
+        run: |
+          cargo bench --bench lion_bench -- --json > current.json || \
+            cargo bench --bench lion_bench -- --json
+          python3 packaging/ci/check_bench.py current.json \
+            packaging/ci/bench-baseline.json
+
+  fuzz-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo test --test fuzz_smoke --locked
+      # Short cargo-fuzz pass when the runner has the toolchain budget:
+      # - uses: dtolnay/rust-toolchain@nightly
+      # - run: cargo install cargo-fuzz && cd fuzz && cargo fuzz run
+      #        decode_request -- -max_total_time=60
+
+  coverage:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+      - run: sudo apt-get install -y python3 dbus
+      - name: coverage (core logic > 80%, spec 03 §10)
+        run: |
+          cargo install cargo-llvm-cov
+          cargo llvm-cov --locked --summary-only --fail-under-lines 80

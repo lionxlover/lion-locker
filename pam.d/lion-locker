@@ -1,8 +1,0 @@
-#%PAM-1.0
-# Re-authentication only: no session/account bookkeeping beyond validity
-# checks, since the user's actual session is already running underneath
-# the lock (started by lion-greeter's own PAM session).
-auth      requisite  pam_nologin.so
-@include common-auth
-account   required   pam_nologin.so
-@include common-account

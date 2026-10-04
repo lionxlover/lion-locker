@@ -1,0 +1,15 @@
+Package: lion-locker
+Section: admin
+Priority: optional
+Architecture: any
+Depends: libc6, dbus, systemd (>= 248), libpam0g, libpam-modules, lion-lockscreen
+Recommends: lion-session, lion-notifications, lion-greeter
+Description: LionOS secure screen lock (spec 03)
+ Locks the screen through ext-session-lock-v1: the compositor itself
+ guarantees that nothing but the lock surface is visible or focusable and
+ keeps the screen locked if the locker crashes. Re-authenticates the
+ session owner with PAM, locks before suspend through a logind delay
+ inhibitor and serves os.lionos.Locker1 on the session bus.
+ .
+ Fail-closed by design: a crash, a UI failure or a missing compositor
+ never leaves the session unlocked.

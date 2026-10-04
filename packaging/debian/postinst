@@ -1,0 +1,17 @@
+#!/bin/sh
+# lion-locker postinst: enable the user unit; sanity-check the PAM service.
+set -eu
+
+if command -v systemctl >/dev/null 2>&1; then
+    systemctl --global enable lion-locker.service 2>/dev/null || true
+fi
+
+# The locker refuses to lock into an un-unlockable state; warn early.
+if [ ! -f /etc/pam.d/lion-locker ]; then
+    echo "lion-locker: WARNING: /etc/pam.d/lion-locker is missing; the locker will refuse to lock." >&2
+fi
+
+echo "lion-locker: os.lionos.Locker1 will activate on first use." >&2
+echo "Validate the config with: lion-locker --check-config" >&2
+
+#DEBHELPER#

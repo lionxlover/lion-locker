@@ -1,0 +1,6 @@
+[D-BUS Service]
+Name=os.lionos.Locker1
+# D-Bus activation: the first Lock() call starts the daemon through its
+# systemd user unit (spec 03 §9: prefer D-Bus activation).
+Exec=/usr/bin/lion-locker
+SystemdService=lion-locker.service

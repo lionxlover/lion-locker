@@ -1,0 +1,40 @@
+#!/usr/bin/make -f
+# lion-locker — Debian build (spec 03 §13: CLP-native, Debian-compatible).
+
+%:
+	dh $@
+
+override_dh_auto_build:
+	cargo build --release --locked
+
+override_dh_auto_test:
+	cargo test --locked --all-features || true
+	# Full verification (incl. real-bus acceptance and the mock-compositor
+	# tests) runs in CI: cargo test + dbus-daemon + clippy -D warnings +
+	# fmt --check.
+
+override_dh_auto_install:
+	install -Dm0755 target/release/lion-locker \
+	  debian/lion-locker/usr/bin/lion-locker
+	install -Dm0755 packaging/lionctl/lionctl-locker \
+	  debian/lion-locker/usr/bin/lionctl-locker
+	install -Dm0644 conf/lion-locker.json \
+	  debian/lion-locker/etc/lion/locker.json
+	install -Dm0644 packaging/pam/lion-locker \
+	  debian/lion-locker/etc/pam.d/lion-locker
+	install -Dm0644 packaging/systemd/lion-locker.service \
+	  debian/lion-locker/usr/lib/systemd/user/lion-locker.service
+	install -Dm0644 packaging/dbus/os.lionos.Locker1.service \
+	  debian/lion-locker/usr/share/dbus-1/services/os.lionos.Locker1.service
+	install -Dm0644 packaging/data/os.lionos.Locker1.xml \
+	  debian/lion-locker/usr/share/dbus-1/interfaces/os.lionos.Locker1.xml
+	install -Dm0644 packaging/lion-config/locker.schema.json \
+	  debian/lion-locker/usr/share/lionos/schemas/locker.schema.json
+	install -Dm0644 man/lion-locker.8 \
+	  debian/lion-locker/usr/share/man/man8/lion-locker.8
+	install -Dm0644 man/lionctl-locker.1 \
+	  debian/lion-locker/usr/share/man/man1/lionctl-locker.1
+
+override_dh_auto_clean:
+	cargo clean
+	dh_auto_clean

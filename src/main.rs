@@ -1,159 +1,352 @@
-//! lion-locker: owns lock-screen *authentication*, for LionOS.
+#![forbid(unsafe_code)]
+//! `lion-locker` entry point (spec 03 §9): flags, backend selection, the
+//! tokio runtime, signal handling and the final exit code.
 //!
-//! On `Lock()` it:
-//!   1. grabs input via the `ext-session-lock-v1` Wayland protocol, so no
-//!      surface but its own can be seen or receive input while locked --
-//!      and waits for the compositor's `locked` *confirmation* before
-//!      reporting success (a lock request that failed is surfaced, not
-//!      silently assumed)
-//!   2. tells `lion-lockscreen` to render (over D-Bus) -- the visuals are
-//!      entirely that component's job; this daemon never draws a pixel
-//!      beyond the pre-render safety backdrop
-//!   3. reads the keyboard itself (it holds the only surfaces the
-//!      compositor delivers input to) and re-authenticates the typed
-//!      password via PAM, forwarding module chatter ("place your finger
-//!      on the reader") to the lock screen live
-//!   4. on success, releases the Wayland lock and tells `lion-lockscreen`
-//!      to hide; the session underneath was never touched
+//! Modes:
+//! - `--mock` — all-fakes demo: scripted compositor, no D-Bus, PAM accepts
+//!   the password `lion`, real UI socket. Drive it with
+//!   `cargo run --example locker_client`.
+//! - real (default) — ext-session-lock-v1 via `$WAYLAND_DISPLAY`, libpam,
+//!   logind (system bus), `os.lionos.Locker1` on the session bus.
 //!
-//! If the process dies while locked, the durable episode marker
-//! (state.rs) plus `Restart=always`/`RestartSec=0` in the unit re-acquire
-//! the lock at next start ("crash-relock"), collapsing the classic
-//! Wayland "locker crash = exposed session" window to one restart.
-//!
-//! The password never leaves this process: lion-lockscreen is told about
-//! UI-relevant *events* (pointer motion, "a key was pressed", verifying /
-//! retry / unlocking, module chatter) but is never given the characters
-//! typed. Memory is `mlockall`ed so the buffer cannot be swapped out.
-//!
-//! Out of scope, on purpose: deciding *when* to lock (`lion-idle`'s job --
-//! this only executes `Lock()`, including logind's standard `Lock` signal
-//! for `loginctl lock-session`) and rendering anything
-//! (`lion-lockscreen`'s job).
-//!
-//! # CLI
-//!
-//! `--version`, `--check-pam`, and `--print-runtime` are sysadmin
-//! inspection modes that run and exit (no compositor needed). The
-//! default (no args / `--daemon`) runs the long-lived service.
+//! Startup is fail-closed: no compositor lock protocol, no libpam, or an
+//! unresolvable session owner means the daemon exits non-zero rather than
+//! run in a state where it could lock but not unlock.
 
-mod auth;
-mod keyboard;
-mod lockscreen;
-mod logind;
-mod metrics;
-mod mlock;
-mod pam_ffi;
-mod password;
-mod service;
-mod state;
-mod throttle;
-mod wayland;
+use lion_locker::cli::{self, Args};
+use lion_locker::config::{Config, DEFAULT_CONFIG_PATH};
+use lion_locker::core::{Deps, Event, FsPreflight, Handle, LockerCore};
+use lion_locker::notify::Notify;
+use lion_locker::pam::PamServiceFactory;
+use lion_locker::ports::*;
+use lion_locker::{backends, sysffi, uisock, SCHEMA_JSON, SPEC, VERSION};
+use std::path::PathBuf;
+use std::sync::Arc;
+use tokio::sync::mpsc;
 
-use anyhow::{Context, Result};
-use std::process::ExitCode;
-
-fn main() -> ExitCode {
-    let args: Vec<String> = std::env::args().collect();
-    let mode = args.get(1).map(|s| s.as_str()).unwrap_or("--daemon");
-
-    // CLI inspection modes run without tracing setup noise.
-    match mode {
-        "--version" => {
-            println!(
-                "lion-locker {} (LionOS lock-screen auth daemon)\n\
-                 Edition 2021, MSRV rustc {}\n\
-                 PAM service: lion-locker\n\
-                 Wayland protocol: ext-session-lock-v1",
-                env!("CARGO_PKG_VERSION"),
-                env!("CARGO_PKG_RUST_VERSION"),
-            );
-            return ExitCode::SUCCESS;
-        }
-        "--check-pam" => return run_check_pam(),
-        other if other != "--daemon" && other != "--serve" && !other.is_empty() => {
-            eprintln!("lion-locker: unknown mode `{other}`");
-            eprintln!(
-                "Usage:\n  \
-                 lion-locker [--daemon]     Run the long-lived lock-screen service (default)\n  \
-                 lion-locker --version      Print version info and exit\n  \
-                 lion-locker --check-pam    Probe the PAM stack and exit"
-            );
-            return ExitCode::from(1);
-        }
-        _ => {}
-    }
-
+fn init_logging() {
+    use tracing_subscriber::EnvFilter;
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
     tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "lion_locker=info".into()),
-        )
+        .with_env_filter(filter)
+        .with_writer(std::io::stderr)
+        .with_target(true)
         .init();
+}
 
-    tracing::info!(version = env!("CARGO_PKG_VERSION"), "lion-locker starting");
-    metrics::init_started_unix();
-
-    // Swap-out protection for the password buffer before any episode can
-    // start. Never fatal (degradation ladder in mlock.rs); the outcome
-    // feeds the Capabilities property.
-    match mlock::apply() {
-        mlock::MlockOutcome::Locked => {}
-        mlock::MlockOutcome::SkippedSmallLimit { hard_limit } => {
-            tracing::warn!(hard_limit, "memory lock skipped (RLIMIT_MEMLOCK too small)");
+fn main() {
+    let args = match cli::from_env() {
+        Ok(a) => a,
+        Err(e) => {
+            eprintln!("lion-locker: {e}");
+            std::process::exit(2);
         }
-        mlock::MlockOutcome::Failed { errno } => {
-            tracing::warn!(errno, "memory lock failed; running without it");
-        }
+    };
+    if args.version {
+        println!("lion-locker {VERSION} (LionOS spec {SPEC})");
+        return;
+    }
+    if args.print_schema {
+        println!("{SCHEMA_JSON}");
+        return;
     }
 
-    // Wayland's event loop is blocking/synchronous by design and owns its
-    // own OS thread (see wayland.rs); everything else -- D-Bus, PAM,
-    // throttling -- runs on the async runtime and talks to it over channels.
-    let rt = match tokio::runtime::Builder::new_multi_thread()
+    let config_path = args
+        .config
+        .clone()
+        .or_else(|| std::env::var_os("LION_LOCKER_CONFIG").map(PathBuf::from))
+        .unwrap_or_else(|| PathBuf::from(DEFAULT_CONFIG_PATH));
+
+    if args.check_config {
+        match Config::load(&config_path) {
+            Ok(cfg) => {
+                println!(
+                    "ok: {} (lock_on_suspend={}, grace_period_ms={}, hide_notification_content={}, pam_service={})",
+                    config_path.display(),
+                    cfg.lock_on_suspend,
+                    cfg.grace_period_ms,
+                    cfg.hide_notification_content,
+                    cfg.pam.service
+                );
+            }
+            Err(e) => {
+                eprintln!("config error: {e}");
+                std::process::exit(1);
+            }
+        }
+        return;
+    }
+
+    // A missing config file is fine for --mock; real mode wants the
+    // shipped defaults file but still starts without one (all keys have
+    // defaults) — an *invalid* file is fatal.
+    let cfg = if config_path.exists() {
+        match Config::load(&config_path) {
+            Ok(c) => c,
+            Err(e) => {
+                eprintln!("lion-locker: {e}");
+                std::process::exit(1);
+            }
+        }
+    } else {
+        Config::default()
+    };
+
+    init_logging();
+    std::env::set_var("LION_LOCKER_CONFIG", &config_path);
+
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
         .enable_all()
         .build()
-    {
-        Ok(rt) => rt,
-        Err(e) => {
-            eprintln!("lion-locker: could not build runtime: {e}");
-            return ExitCode::from(1);
+        .expect("tokio runtime");
+    let code = rt.block_on(run(cfg, args));
+    std::process::exit(code);
+}
+
+async fn run(mut cfg: Config, args: Args) -> i32 {
+    if args.mock {
+        // A mock run has no real UI binary: an external client connects.
+        cfg.ui.exec = vec![];
+        cfg.preflight = false;
+    }
+    let user = match sysffi::username_of_uid(cfg.owner()) {
+        Some(u) => u,
+        None if args.mock => "lion".to_string(),
+        None => {
+            tracing::error!(target: "locker", "cannot resolve uid {} to a user name", cfg.owner());
+            return 1;
         }
     };
 
-    match rt.block_on(async_main()) {
-        Ok(()) => ExitCode::SUCCESS,
+    if let Err(e) = lion_locker::core::ensure_state_dir(&cfg) {
+        tracing::error!(target: "locker", "{e}");
+        return 1;
+    }
+    let listener = match uisock::bind(&cfg.socket_path()) {
+        Ok(l) => l,
         Err(e) => {
-            eprintln!("lion-locker: {e:#}");
-            ExitCode::from(1)
+            tracing::error!(target: "locker", "cannot bind the UI socket: {e}");
+            return 1;
         }
+    };
+
+    let (bev_tx, mut bev_rx) = mpsc::unbounded_channel::<BackendEvent>();
+    let (lev_tx, mut lev_rx) = mpsc::unbounded_channel::<LogindEvent>();
+    let (sig_tx, sig_rx) = mpsc::unbounded_channel();
+
+    let deps = if args.mock {
+        mock_deps(&cfg, bev_tx.clone(), user)
+    } else {
+        match real_deps(&cfg, bev_tx.clone(), lev_tx, user).await {
+            Ok(d) => d,
+            Err(code) => return code,
+        }
+    };
+
+    let (core, handle) = LockerCore::new(cfg.clone(), deps, sig_tx);
+    spawn_bridges(&handle, &mut bev_rx, &mut lev_rx);
+    spawn_signal_bridge(handle.ev_tx.clone());
+    tokio::spawn(uisock::serve(
+        listener,
+        cfg.clone(),
+        handle.ev_tx.clone(),
+        handle.ui_pid.clone(),
+    ));
+
+    // The bus service runs in mock mode too (scripted compositor/PAM behind
+    // the real interface): the D-Bus acceptance tests drive exactly this.
+    #[cfg(feature = "real-bus")]
+    let _bus_conn = match lion_locker::bus::serve(&cfg, &cfg.bus.name, &handle, sig_rx).await {
+        Ok(c) => Some(c),
+        Err(e) => {
+            if args.mock {
+                tracing::warn!(target: "bus", "mock mode without a session bus: {e}");
+                None
+            } else {
+                tracing::error!(target: "bus", "cannot serve {}: {e}", cfg.bus.name);
+                return 1;
+            }
+        }
+    };
+    #[cfg(not(feature = "real-bus"))]
+    drop(sig_rx);
+
+    if args.mock && std::env::var_os("LION_LOCKER_MOCK_AUTOLOCK").is_some() {
+        // Demo: lock shortly after start so a client has something to unlock.
+        let tx = handle.ev_tx.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+            let _ = tx.send(Event::Lock {
+                source: lion_locker::core::LockSource::Bus,
+                reply: None,
+            });
+        });
+    }
+
+    core.run().await
+}
+
+fn spawn_bridges(
+    handle: &Handle,
+    bev_rx: &mut mpsc::UnboundedReceiver<BackendEvent>,
+    lev_rx: &mut mpsc::UnboundedReceiver<LogindEvent>,
+) {
+    let tx = handle.ev_tx.clone();
+    let mut b = std::mem::replace(bev_rx, mpsc::unbounded_channel().1);
+    tokio::spawn(async move {
+        while let Some(e) = b.recv().await {
+            if tx.send(Event::Backend(e)).is_err() {
+                break;
+            }
+        }
+    });
+    let tx = handle.ev_tx.clone();
+    let mut l = std::mem::replace(lev_rx, mpsc::unbounded_channel().1);
+    tokio::spawn(async move {
+        while let Some(e) = l.recv().await {
+            if tx.send(Event::Logind(e)).is_err() {
+                break;
+            }
+        }
+    });
+}
+
+/// SIGTERM → graceful stop (the compositor keeps the screen locked);
+/// SIGHUP → reload the config without dropping the UI (spec 03 §9).
+fn spawn_signal_bridge(ev_tx: mpsc::UnboundedSender<Event>) {
+    tokio::spawn(async move {
+        use tokio::signal::unix::{signal, SignalKind};
+        let mut term = signal(SignalKind::terminate()).expect("SIGTERM handler");
+        let mut hup = signal(SignalKind::hangup()).expect("SIGHUP handler");
+        loop {
+            tokio::select! {
+                _ = term.recv() => {
+                    let _ = ev_tx.send(Event::SigTerm);
+                    return;
+                }
+                _ = hup.recv() => {
+                    let path = std::env::var_os("LION_LOCKER_CONFIG")
+                        .map(PathBuf::from)
+                        .unwrap_or_else(|| PathBuf::from(DEFAULT_CONFIG_PATH));
+                    match Config::load(&path) {
+                        Ok(c) => { let _ = ev_tx.send(Event::Reload(Box::new(c))); }
+                        Err(e) => tracing::error!(target: "locker", "SIGHUP: reload rejected: {e}"),
+                    }
+                }
+            }
+        }
+    });
+}
+
+fn mock_deps(cfg: &Config, bev_tx: mpsc::UnboundedSender<BackendEvent>, user: String) -> Deps {
+    use lion_locker::mocks::*;
+    use lion_locker::pam::mock::{MockPamFactory, MockScript};
+    tracing::info!(target: "locker", "mock mode: scripted compositor, no bus; PAM password is \"lion\"");
+    let _ = cfg;
+    Deps {
+        backend: MockBackend::new(bev_tx),
+        logind: Arc::new(MockLogind::default()),
+        notifier: Arc::new(MockNotifier::default()),
+        privacy: Arc::new(MockPrivacy::default()),
+        preflight: Arc::new(MockPreflight::default()),
+        ui_launcher: Arc::new(MockUiLauncher::default()),
+        pam: Arc::new(MockPamFactory::new(MockScript::success("lion"))),
+        notify: Notify::from_env(),
+        user,
     }
 }
 
-async fn async_main() -> Result<()> {
-    let (wl, wl_events) = wayland::spawn().context("starting Wayland session-lock client")?;
-    service::serve(wl, wl_events).await
-}
+#[cfg_attr(
+    not(all(feature = "real-pam", feature = "real-wayland", feature = "real-bus")),
+    allow(unused_variables, unreachable_code)
+)]
+async fn real_deps(
+    cfg: &Config,
+    bev_tx: mpsc::UnboundedSender<BackendEvent>,
+    lev_tx: mpsc::UnboundedSender<LogindEvent>,
+    user: String,
+) -> std::result::Result<Deps, i32> {
+    // PAM first: a locker that cannot unlock must not run (fail closed).
+    #[cfg(feature = "real-pam")]
+    let pam: Arc<dyn PamServiceFactory> = match lion_locker::pam::real::RealPamFactory::new() {
+        Ok(f) => Arc::new(f),
+        Err(e) => {
+            tracing::error!(target: "locker", "libpam unavailable ({e}); refusing to run");
+            return Err(1);
+        }
+    };
+    #[cfg(not(feature = "real-pam"))]
+    let pam: Arc<dyn PamServiceFactory> = {
+        tracing::error!(target: "locker", "built without real-pam; use --mock");
+        return Err(1);
+    };
 
-/// Probe the PAM stack (`lion-locker` service) so a sysadmin can verify
-/// post-install that the re-auth path is loadable. `pam_start` +
-/// immediate `pam_end` with a sentinel user; no authentication attempt.
-fn run_check_pam() -> ExitCode {
-    let probe = "lion-locker-probe";
-    let empty = zeroize::Zeroizing::new(String::new());
-    let source = Box::new(pam_ffi::PasswordSource::new(empty, Box::new(|_| {})));
-    match pam_ffi::PamContext::start_with_source(auth::pam_service(), probe, source) {
-        Ok(_ctx) => {
-            println!("PAM service `{}` loads cleanly", auth::pam_service());
-            ExitCode::SUCCESS
-        }
-        Err(code) => {
-            eprintln!(
-                "PAM service `{}` failed to start (code {code}).\n\
-                 Check /etc/pam.d/lion-locker and the modules it includes.",
-                auth::pam_service()
-            );
-            ExitCode::from(1)
-        }
-    }
+    #[cfg(feature = "real-wayland")]
+    let backend: Arc<dyn LockBackend> =
+        match lion_locker::wayland::WaylandBackend::connect(cfg.cover_argb(), bev_tx) {
+            Ok(b) => Arc::new(b),
+            Err(e) => {
+                tracing::error!(target: "locker", "{e}");
+                return Err(1);
+            }
+        };
+    #[cfg(not(feature = "real-wayland"))]
+    let backend: Arc<dyn LockBackend> = {
+        let _ = bev_tx;
+        tracing::error!(target: "locker", "built without real-wayland; use --mock");
+        return Err(1);
+    };
+
+    #[cfg(feature = "real-bus")]
+    let (logind, notifier, privacy): (Arc<dyn Logind>, Arc<dyn Notifier>, Arc<dyn Privacy>) = {
+        use backends::zbus_backends::*;
+        let which = if cfg.bus.logind == "session" {
+            LogindBus::Session
+        } else {
+            LogindBus::System
+        };
+        let logind: Arc<dyn Logind> = match ZbusLogind::connect(which).await {
+            Ok(l) => {
+                l.watch(lev_tx);
+                Arc::new(l)
+            }
+            Err(e) => {
+                tracing::warn!(target: "locker", "logind unreachable ({e}): no lock-before-sleep, no lid/lock signals, no quick actions");
+                Arc::new(backends::NullLogind)
+            }
+        };
+        let notifier: Arc<dyn Notifier> = match NotificationsNotifier::connect().await {
+            Ok(n) => Arc::new(n),
+            Err(_) => Arc::new(backends::LogNotifier),
+        };
+        let privacy: Arc<dyn Privacy> = match NotificationPrivacy::connect().await {
+            Ok(p) => Arc::new(p),
+            Err(_) => Arc::new(backends::NoopPrivacy),
+        };
+        (logind, notifier, privacy)
+    };
+    #[cfg(not(feature = "real-bus"))]
+    let (logind, notifier, privacy): (Arc<dyn Logind>, Arc<dyn Notifier>, Arc<dyn Privacy>) = {
+        let _ = lev_tx;
+        (
+            Arc::new(backends::NullLogind),
+            Arc::new(backends::LogNotifier),
+            Arc::new(backends::NoopPrivacy),
+        )
+    };
+
+    Ok(Deps {
+        backend,
+        logind,
+        notifier,
+        privacy,
+        preflight: Arc::new(FsPreflight),
+        ui_launcher: Arc::new(backends::DirectLauncher {
+            socket_path: cfg.socket_path(),
+        }),
+        pam,
+        notify: Notify::from_env(),
+        user,
+    })
 }

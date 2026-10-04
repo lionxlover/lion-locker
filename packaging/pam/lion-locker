@@ -1,0 +1,14 @@
+#%PAM-1.0
+# /etc/pam.d/lion-locker — re-authentication for the LionOS screen locker
+# (spec 03 §3). Debian/LionOS stack. The locker opens this service for the
+# *session owner only* and never calls pam_setcred/pam_open_session: the
+# screen lock is not a login.
+#
+# pam_faillock (when present) stays the authoritative lockout; the
+# daemon's own exponential throttle is a soft layer on top.
+auth    required   pam_faillock.so preauth
+@include common-auth
+auth    [default=die] pam_faillock.so authfail
+auth    sufficient pam_faillock.so authsucc
+account required   pam_faillock.so
+@include common-account
